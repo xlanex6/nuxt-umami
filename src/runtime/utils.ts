@@ -1,9 +1,11 @@
 import type { ModuleOptions } from '../options';
 import type {
+  ErrorPayload,
   EventPayload,
   FetchResult,
   NormalizedModuleOptions,
   PayloadTypes,
+  PerformancePayload,
   ServerPayload,
   ViewPayload,
 } from '../types';
@@ -42,6 +44,13 @@ function normalizeConfig(options: ModuleOptions = {}): NormalizedModuleOptions {
     excludeQueryParams = false,
     trailingSlash = 'any',
     urlOptions,
+    distinctId = null,
+    doNotTrack = false,
+    performance = false,
+    errors = false,
+    release = null,
+    environment = null,
+    beforeSend = null,
   } = options;
 
   return {
@@ -83,6 +92,13 @@ function normalizeConfig(options: ModuleOptions = {}): NormalizedModuleOptions {
     useDirective: useDirective === true,
     logErrors: logErrors === true,
     enabled: enabled !== false,
+    distinctId: isValidString(distinctId) ? distinctId.trim().slice(0, 50) : null,
+    doNotTrack: doNotTrack === true,
+    performance: performance === true,
+    errors: errors === true,
+    release: isValidString(release) ? release.trim().slice(0, 100) : null,
+    environment: isValidString(environment) ? environment.trim().slice(0, 50) : null,
+    beforeSend: isValidString(beforeSend) ? beforeSend.trim() : null,
   };
 }
 
@@ -114,29 +130,65 @@ function flattenObject(obj?: Record<string, unknown> | null, prefix = '') {
 const validatorFns = {
   nonempty: isValidString,
   string: (value: unknown) => typeof value === 'string',
+  number: (value: unknown) => typeof value === 'number' && Number.isFinite(value),
+  boolean: (value: unknown) => typeof value === 'boolean',
   data: (value: unknown) => isRecord(value, true),
+  tags: (value: unknown) => {
+    if (!isRecord(value))
+      return false;
+    const keys = Object.keys(value);
+    if (keys.length > 20)
+      return false;
+    return keys.every(k => typeof value[k] === 'string');
+  },
+  fingerprint: (value: unknown) => {
+    if (!Array.isArray(value) || value.length > 5)
+      return false;
+    return value.every(v => typeof v === 'string');
+  },
   skip: () => true,
 } as const;
 
 type PropertyValidator = keyof typeof validatorFns;
-type Payload = ViewPayload & EventPayload;
+type TrackPayload = ViewPayload & EventPayload;
 
-const _payloadProps: Record<keyof Payload, PropertyValidator> = {
+const _payloadProps: Record<keyof TrackPayload, PropertyValidator> = {
   hostname: 'nonempty',
   language: 'nonempty',
   screen: 'nonempty',
   url: 'nonempty',
   referrer: 'string',
   title: 'string',
-  tag: 'skip', // optional property
-  name: 'skip', // optional, 'nonempty' in EventPayload
-  data: 'skip', // optional, 'data' in EventPayload & IdentifyPayload
+  tag: 'skip',
+  name: 'skip',
+  data: 'skip',
+  id: 'skip',
 } as const;
 
-const _payloadType: PayloadTypes = ['event', 'identify'];
+const _perfMetricKeys = ['ttfb', 'fcp', 'lcp', 'cls', 'inp', 'duration'] as const;
+
+const _errorProps: Record<keyof ErrorPayload, PropertyValidator> = {
+  version: 'skip',
+  eventId: 'nonempty',
+  timestamp: 'number',
+  name: 'nonempty',
+  message: 'string',
+  stack: 'string',
+  handled: 'boolean',
+  url: 'nonempty',
+  screen: 'nonempty',
+  language: 'nonempty',
+  id: 'skip',
+  release: 'skip',
+  environment: 'skip',
+  tags: 'skip',
+  fingerprint: 'skip',
+} as const;
+
+const _payloadType: PayloadTypes = ['event', 'identify', 'performance', 'error'];
 const _bodyProps: Array<keyof ServerPayload> = ['cache', 'payload', 'type'];
 
-function isValidPayload(obj: object): obj is Payload {
+function isValidTrackPayload(obj: object): obj is TrackPayload {
   if (!isRecord(obj))
     return false;
 
@@ -144,7 +196,7 @@ function isValidPayload(obj: object): obj is Payload {
 
   const validators: typeof _payloadProps = { ..._payloadProps };
 
-  const validatorKeys: Array<keyof Payload> = [
+  const validatorKeys: Array<keyof TrackPayload> = [
     'hostname',
     'language',
     'screen',
@@ -154,24 +206,25 @@ function isValidPayload(obj: object): obj is Payload {
   ];
 
   if (objKeys.includes('name')) {
-    // is EventPayload, update validators
     validatorKeys.push('name');
     validators.name = 'nonempty';
   }
 
-  // optional data is present, update validators
   if (objKeys.includes('data')) {
     validatorKeys.push('data');
     validators.data = 'data';
   }
 
-  // optional property is present, update validators
   if (objKeys.includes('tag')) {
     validatorKeys.push('tag');
     validators.tag = 'string';
   }
 
-  // check: all keys are present, no more, no less
+  if (objKeys.includes('id')) {
+    validatorKeys.push('id');
+    validators.id = 'string';
+  }
+
   if (
     objKeys.length !== validatorKeys.length
     || !validatorKeys.every(k => objKeys.includes(k))
@@ -179,14 +232,95 @@ function isValidPayload(obj: object): obj is Payload {
     return false;
   }
 
-  // run each value against its validator
   for (const key in obj) {
-    const fn = validatorFns[validators[key as keyof Payload]];
+    const fn = validatorFns[validators[key as keyof TrackPayload]];
     const value = obj[key];
     if (fn(value))
       continue;
     return false;
   }
+  return true;
+}
+
+function isValidPerformancePayload(obj: object): obj is PerformancePayload {
+  if (!isRecord(obj))
+    return false;
+
+  const base: Record<string, unknown> = {
+    hostname: obj.hostname,
+    language: obj.language,
+    screen: obj.screen,
+    url: obj.url,
+    referrer: obj.referrer,
+    title: obj.title,
+  };
+
+  if (typeof obj.tag === 'string')
+    base.tag = obj.tag;
+  if (typeof obj.id === 'string')
+    base.id = obj.id;
+
+  if (!isValidTrackPayload(base))
+    return false;
+
+  for (const key of Object.keys(obj)) {
+    if (key in base)
+      continue;
+    if (!includes(_perfMetricKeys, key) || typeof obj[key] !== 'number')
+      return false;
+  }
+
+  return true;
+}
+
+function isValidErrorPayload(obj: object): obj is ErrorPayload {
+  if (!isRecord(obj))
+    return false;
+
+  const required: Array<keyof ErrorPayload> = [
+    'version',
+    'eventId',
+    'timestamp',
+    'name',
+    'message',
+    'stack',
+    'handled',
+    'url',
+    'screen',
+    'language',
+  ];
+
+  for (const key of required) {
+    if (!(key in obj))
+      return false;
+  }
+
+  if (obj.version !== 1)
+    return false;
+
+  const validators = { ..._errorProps };
+
+  if ('id' in obj)
+    validators.id = 'string';
+  if ('release' in obj)
+    validators.release = 'string';
+  if ('environment' in obj)
+    validators.environment = 'string';
+  if ('tags' in obj)
+    validators.tags = 'tags';
+  if ('fingerprint' in obj)
+    validators.fingerprint = 'fingerprint';
+
+  const allowed = new Set(Object.keys(_errorProps));
+
+  for (const key of Object.keys(obj)) {
+    if (!allowed.has(key))
+      return false;
+    const fn = validatorFns[validators[key as keyof ErrorPayload]];
+    if (!fn(obj[key]))
+      return false;
+  }
+
   return true;
 }
 
@@ -218,9 +352,17 @@ function parseEventBody(body: unknown): ValidatePayloadReturn {
   if (!includes(_payloadType, type))
     return error;
 
-  // check: body.payload is valid
-  if (!isValidPayload(payload))
+  if (type === 'error') {
+    if (!isValidErrorPayload(payload))
+      return error;
+  }
+  else if (type === 'performance') {
+    if (!isValidPerformancePayload(payload))
+      return error;
+  }
+  else if (!isValidTrackPayload(payload)) {
     return error;
+  }
 
   return {
     success: true,

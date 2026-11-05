@@ -2,10 +2,14 @@ import type { ModuleOptions } from './options';
 
 // !IMPORTANT: Sync with example.ts
 
-interface _NormalizedOpts extends Required<ModuleOptions> {
+interface _NormalizedOpts extends Required<Omit<ModuleOptions, 'apiUrl' | 'apiKey'>> {
   domains: Array<string> | null;
   customEndpoint: `/${string}` | null;
   urlOptions: Required<Required<ModuleOptions>['urlOptions']>;
+  distinctId: string | null;
+  release: string | null;
+  environment: string | null;
+  beforeSend: string | null;
 }
 
 type NormalizedModuleOptions = Prettify<
@@ -30,18 +34,24 @@ interface UmPrivateConfig {
   endpoint: string;
 }
 
-type PreflightResult = true | 'ssr' | 'domain' | 'localhost' | 'local-storage';
+interface UmamiApiConfig {
+  apiUrl: string;
+  apiKey: string;
+}
+
+type PreflightResult = true | 'ssr' | 'domain' | 'localhost' | 'local-storage' | 'do-not-track';
 type ModuleMode = 'faux' | 'proxy' | 'direct';
 
 type EventData = Record<string, string | number | boolean> | null;
 
-type PayloadTypes = ['event', 'identify'];
+type PayloadTypes = ['event', 'identify', 'performance', 'error'];
 
 interface StaticPayload {
   screen: string;
   language: string;
   hostname: string;
   tag?: string;
+  id?: string;
 }
 
 interface ViewPayload extends StaticPayload {
@@ -59,10 +69,44 @@ interface IdentifyPayload extends ViewPayload {
   data?: Record<string, unknown>;
 }
 
+interface PerformancePayload extends ViewPayload {
+  ttfb?: number;
+  fcp?: number;
+  lcp?: number;
+  cls?: number;
+  inp?: number;
+  duration?: number;
+}
+
+interface ErrorPayload {
+  version: 1;
+  eventId: string;
+  timestamp: number;
+  name: string;
+  message: string;
+  stack: string;
+  handled: boolean;
+  url: string;
+  screen: string;
+  language: string;
+  id?: string;
+  release?: string;
+  environment?: string;
+  tags?: Record<string, string>;
+  fingerprint?: string[];
+}
+
+interface CaptureExceptionOptions {
+  release?: string;
+  environment?: string;
+  tags?: Record<string, string>;
+  fingerprint?: string[];
+}
+
 interface ServerPayload {
   cache?: string;
   type: PayloadTypes[number];
-  payload: ViewPayload | EventPayload;
+  payload: ViewPayload | EventPayload | IdentifyPayload | PerformancePayload | ErrorPayload;
 };
 
 type FetchResult = Promise<{ ok: boolean }>;
@@ -81,7 +125,9 @@ type Prettify<T> = {
 
 export type {
   BuildPathUrlFn,
+  CaptureExceptionOptions,
   CurrencyCode,
+  ErrorPayload,
   EventData,
   EventPayload,
   FetchFn,
@@ -90,9 +136,11 @@ export type {
   ModuleMode,
   NormalizedModuleOptions,
   PayloadTypes,
+  PerformancePayload,
   PreflightResult,
   ServerPayload,
   StaticPayload,
+  UmamiApiConfig,
   UmPrivateConfig,
   UmPublicConfig,
   ViewPayload,

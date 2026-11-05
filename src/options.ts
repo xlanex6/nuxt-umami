@@ -77,6 +77,68 @@ type ModuleOptions = Partial<{
    */
   proxy: false | 'direct' | 'cloak';
   /**
+   * Distinct ID attached as `payload.id` on every collect.
+   *
+   * @default null
+   */
+  distinctId: string | null;
+  /**
+   * Disable tracking when the browser Do Not Track signal is enabled.
+   *
+   * @default false
+   */
+  doNotTrack: boolean;
+  /**
+   * Collect Core Web Vitals (LCP/INP/CLS/FCP/TTFB) as `type: 'performance'`.
+   *
+   * @default false
+   */
+  performance: boolean;
+  /**
+   * Capture JS errors (`window` error / unhandledrejection) and allow `umCaptureException`.
+   *
+   * @default false
+   */
+  errors: boolean;
+  /**
+   * Default release label for captured errors (max 100 chars).
+   *
+   * @default null
+   */
+  release: string | null;
+  /**
+   * Default environment label for captured errors (max 50 chars).
+   *
+   * @default null
+   */
+  environment: string | null;
+  /**
+   * Name of a `window` function called before each send: `(type, payload) => payload | falsy`.
+   * Falsy return cancels the send.
+   *
+   * @default null
+   */
+  beforeSend: string | null;
+  /**
+   * Umami instance origin for the server-only Read API.
+   * Kept private — never shipped to the client.
+   *
+   * Override with `NUXT_UMAMI_API_URL`.
+   *
+   * @example 'https://umami.example.com'
+   * @default null
+   */
+  apiUrl: string | null;
+  /**
+   * Umami API key (`umami_…`) for the server-only Read API.
+   * Kept private — never shipped to the client.
+   *
+   * Override with `NUXT_UMAMI_API_KEY`.
+   *
+   * @default null
+   */
+  apiKey: string | null;
+  /**
    * Consistent trailing slash
    *
    * @default 'any'
