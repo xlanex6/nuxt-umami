@@ -21,6 +21,17 @@ export default defineNuxtConfig({
       excludeSearch: false,
       trailingSlash: 'always',
     },
+    // Tracker extras (optional):
+    // distinctId: 'playground-user',
+    // doNotTrack: true,
+    // performance: true,
+    // errors: true,
+    // release: 'playground@dev',
+    // environment: 'development',
+    // beforeSend: 'umamiBeforeSend',
+    // Server-only Read API (also NUXT_UMAMI_API_URL / NUXT_UMAMI_API_KEY):
+    // apiUrl: 'https://savory.ijkml.dev',
+    // apiKey: 'umami_xxxxxxxx',
   },
 
   appConfig: {

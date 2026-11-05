@@ -40,6 +40,8 @@ export default defineNuxtModule<ModuleOptions>({
     const envHost = ENV.NUXT_UMAMI_HOST || ENV.NUXT_PUBLIC_UMAMI_HOST;
     const envId = ENV.NUXT_UMAMI_ID || ENV.NUXT_PUBLIC_UMAMI_ID;
     const envTag = ENV.NUXT_UMAMI_TAG || ENV.NUXT_PUBLIC_UMAMI_TAG;
+    const envApiUrl = ENV.NUXT_UMAMI_API_URL;
+    const envApiKey = ENV.NUXT_UMAMI_API_KEY;
 
     const {
       enabled,
@@ -56,6 +58,13 @@ export default defineNuxtModule<ModuleOptions>({
       ...(isValidString(envHost) && { host: envHost }),
       ...(isValidString(envTag) && { tag: envTag }),
     });
+
+    const apiUrl = isValidString(envApiUrl)
+      ? envApiUrl.trim()
+      : (isValidString(options.apiUrl) ? options.apiUrl.trim() : '');
+    const apiKey = isValidString(envApiKey)
+      ? envApiKey.trim()
+      : (isValidString(options.apiKey) ? options.apiKey.trim() : '');
 
     const endpoint = host ? new URL(host).origin + (customEndpoint || '/api/send') : '';
 
@@ -77,22 +86,28 @@ export default defineNuxtModule<ModuleOptions>({
       if (proxyOpts.includes(proxy)) {
         // ^ proxy is enabled, requests can be proxied
         if (proxy === 'cloak') {
-          // ^ proxy mode: cloak; add API route
+          // ^ proxy mode: cloak; add API route (+ prefixed alias)
           mode = 'proxy';
+          const cloakHandler = resolve('./runtime/server/endpoint');
           addServerHandler({
             route: '/api/savory',
-            handler: resolve('./runtime/server/endpoint'),
+            handler: cloakHandler,
+          });
+          addServerHandler({
+            route: '/api/_umami/send',
+            handler: cloakHandler,
           });
           privateConfig.endpoint = endpoint;
           privateConfig.website = id;
         }
         else if (proxy === 'direct') {
-          // ^ proxy mode: direct; add proxy rule
+          // ^ proxy mode: direct; add proxy rule (+ prefixed alias)
           mode = 'direct';
           publicConfig.endpoint = '/api/savory';
           publicConfig.website = id;
           nuxt.options.routeRules ||= {};
           nuxt.options.routeRules['/api/savory'] = { proxy: endpoint };
+          nuxt.options.routeRules['/api/_umami/send'] = { proxy: endpoint };
         }
       }
       else {
@@ -122,6 +137,17 @@ export default defineNuxtModule<ModuleOptions>({
     // add private config to runtime, only usable in server
     runtimeConfig._proxyUmConfig = privateConfig;
 
+    // Read API credentials — private only; never put apiKey in public runtimeConfig
+    runtimeConfig._umamiApi = { apiUrl, apiKey };
+
+    if (apiUrl && apiKey) {
+      const readApiHandler = resolve('./runtime/server/api');
+      addServerHandler({
+        route: '/api/_umami/**',
+        handler: readApiHandler,
+      });
+    }
+
     // generate utils template
     addTemplate({
       getContents: generateTemplate,
@@ -137,7 +163,13 @@ export default defineNuxtModule<ModuleOptions>({
       },
     });
 
-    const composables = ['umTrackEvent', 'umTrackView', 'umIdentify', 'umTrackRevenue'];
+    const composables = [
+      'umTrackEvent',
+      'umTrackView',
+      'umIdentify',
+      'umTrackRevenue',
+      'umCaptureException',
+    ];
 
     // add composables
     addImports(composables.map((name) => {
@@ -145,6 +177,26 @@ export default defineNuxtModule<ModuleOptions>({
         name,
         as: name,
         from: resolve('runtime/composables'),
+      };
+    }));
+
+    const readComposables = [
+      'useUmamiWebsites',
+      'useUmamiWebsite',
+      'useUmamiStats',
+      'useUmamiActive',
+      'useUmamiPageviews',
+      'useUmamiEventsSeries',
+      'useUmamiMetrics',
+      'useUmamiMetricsExpanded',
+      'useUmamiRealtime',
+    ];
+
+    addImports(readComposables.map((name) => {
+      return {
+        name,
+        as: name,
+        from: resolve('runtime/composables/read'),
       };
     }));
 

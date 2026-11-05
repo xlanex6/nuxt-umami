@@ -12,13 +12,11 @@ interface TemplateOptions {
   };
 };
 
-const fn_faux = `const payload = load.payload;
-
-  if (enabled) {
+const fn_faux = `if (enabled) {
     if (!endpoint)
-      logger('endpoint', payload);
+      logger('endpoint', load.payload);
     if (!website)
-      logger('id', payload);
+      logger('id', load.payload);
 
     return Promise.resolve({ ok: false });
   }
@@ -33,12 +31,10 @@ const fn_proxy = `return ofetch('/api/savory', {
     .then(handleSuccess)
     .catch(handleError);`;
 
-const fn_direct = `const { type, payload } = load;
-
-  return ofetch(endpoint, {
+const fn_direct = `return ofetch(endpoint, {
     method: 'POST',
     headers: { ...(cache && { 'x-umami-cache': cache }) },
-    body: { type, payload: { ...payload, website } },
+    body: { type: load.type, payload: { ...load.payload, website } },
     credentials: 'omit',
   })
     .then(handleSuccess)
@@ -68,8 +64,9 @@ export const logger = $logger;
 */
 export const config = ${JSON.stringify(config, null, 2)};
 
-const { endpoint, website, enabled } = config;
+const { endpoint, website, enabled, beforeSend: beforeSendName } = config;
 let cache = '';
+let identity = typeof config.distinctId === 'string' ? config.distinctId : '';
 
 function handleError(err) {
   try {
@@ -85,8 +82,32 @@ function handleError(err) {
 }
 
 function handleSuccess(response) {
-  cache = typeof response === 'string' ? response : '';
+  if (typeof response === 'string') {
+    cache = response;
+  }
+  else if (response && typeof response === 'object' && typeof response.cache === 'string') {
+    cache = response.cache;
+  }
+  else {
+    cache = '';
+  }
   return { ok: true };
+}
+
+/**
+ * Remember Distinct ID for subsequent collects. Clears session cache.
+ * @param {string | null | undefined} id
+ */
+export function setIdentity(id) {
+  identity = typeof id === 'string' ? id : '';
+  cache = '';
+}
+
+/**
+ * @returns {string}
+ */
+export function getIdentity() {
+  return identity;
 }
 
 /**
@@ -116,11 +137,45 @@ export function buildPathUrl(loc) {
 }
 
 /**
+ * @param {string} type
+ * @param {Record<string, unknown>} payload
+ */
+async function applyBeforeSend(type, payload) {
+  if (!beforeSendName || typeof window === 'undefined')
+    return payload;
+
+  const callback = window[beforeSendName];
+  if (typeof callback !== 'function') {
+    logger('before-send', beforeSendName);
+    return payload;
+  }
+
+  try {
+    const next = await Promise.resolve(callback(type, payload));
+    return next || null;
+  }
+  catch (err) {
+    logger('before-send', err);
+    return null;
+  }
+}
+
+/**
  * @type FetchFn 
  * 
  * @variation ${mode}
  */
 export async function collect(load) {
+  let payload = { ...load.payload };
+  if (identity)
+    payload.id = identity;
+
+  const next = await applyBeforeSend(load.type, payload);
+  if (!next)
+    return { ok: false };
+
+  load = { ...load, payload: next };
+
   ${collectFn[`fn_${mode}`]}
 }
 `;
